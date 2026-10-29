@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from '@inertiajs/react';
+import { Link, usePage } from '@inertiajs/react';
 import { 
     Home,
     Tag,
@@ -80,6 +80,7 @@ const SidebarSubGroup = ({ label, active, isOpen, onToggle, children }) => {
                 type="button"
                 onClick={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     onToggle();
                 }}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors duration-200 cursor-pointer ${
@@ -132,6 +133,12 @@ export default function Sidebar({ className = '' }) {
         isActive('reports.mobile-bank-book') || 
         isActive('reports.profit-loss');
 
+    const isSalesReportsActive = 
+        isActive('reports.sales') ||
+        isActive('reports.customer-ledger') ||
+        isActive('reports.sales-due') ||
+        isActive('reports.halkhata');
+
     // Auto-folding Accordion State (only one main group open at a time)
     const [openGroup, setOpenGroup] = useState(() => {
         // First check session storage for persistence across navigations
@@ -158,7 +165,9 @@ export default function Sidebar({ className = '' }) {
     const [openNestedGroup, setOpenNestedGroup] = useState(() => {
         const saved = sessionStorage.getItem('sidebar_open_nested_group');
         if (saved !== null && saved !== 'null') return saved;
-        return isAccountsReportActive ? 'accounts_report' : null;
+        if (isAccountsReportActive) return 'accounts_report';
+        if (isSalesReportsActive) return 'sales_reports';
+        return null;
     });
 
     const toggleGroup = (groupKey) => {
@@ -195,12 +204,15 @@ export default function Sidebar({ className = '' }) {
         }
     }, []);
 
+    const { software_name, company_name } = usePage().props;
+    const dynamicBrandName = software_name || company_name || 'স্বর্ণালংকার জুয়েলার্স';
+
     return (
         <div className={`flex h-full flex-col shadow-xl ${className}`} style={{ backgroundColor: 'rgb(250, 151, 10)' }}>
             <div className="flex h-16 flex-shrink-0 items-center px-4" style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}>
                 <Link href="/" className="flex items-center">
                     <Gem className="h-7 w-7 text-amber-200" />
-                    <span className="ml-2.5 text-base font-black text-white tracking-wide truncate">Jewelry ERP</span>
+                    <span className="ml-2.5 text-base font-black text-white tracking-wide truncate">{dynamicBrandName}</span>
                 </Link>
             </div>
             
@@ -382,11 +394,24 @@ export default function Sidebar({ className = '' }) {
                         isOpen={openGroup === 'reports'}
                         onToggle={() => toggleGroup('reports')}
                     >
+                        {/* Sales Reports Dropdown Submenu */}
+                        <SidebarSubGroup
+                            label={t('salesReports') || 'Sales Reports'}
+                            active={isSalesReportsActive}
+                            isOpen={openNestedGroup === 'sales_reports'}
+                            onToggle={() => toggleNestedGroup('sales_reports')}
+                        >
+                            <SidebarSubItem label={t('allSalesReport') || 'All Sales Report'} href={route('reports.sales')} active={isActive('reports.sales')} />
+                            <SidebarSubItem label={t('customerLedger') || 'Customer Ledger'} href={route('reports.customer-ledger')} active={isActive('reports.customer-ledger')} />
+                            <SidebarSubItem label={t('salesDueReport') || 'Sales Due Report'} href={route('reports.sales-due')} active={isActive('reports.sales-due')} />
+                            <SidebarSubItem label={t('halkhata') || 'Halkhata'} href={route('reports.halkhata')} active={isActive('reports.halkhata')} />
+                        </SidebarSubGroup>
+
                         {/* Accounts Report Dropdown Submenu */}
                         <SidebarSubGroup
                             label={t('accountsReport') || 'Accounts Report'}
                             active={isAccountsReportActive}
-                            isOpen={openNestedGroup === 'accounts_report' || isAccountsReportActive}
+                            isOpen={openNestedGroup === 'accounts_report'}
                             onToggle={() => toggleNestedGroup('accounts_report')}
                         >
                             <SidebarSubItem label={t('dayBook')} href={route('reports.day-book')} active={isActive('reports.day-book')} />
@@ -396,7 +421,6 @@ export default function Sidebar({ className = '' }) {
                             <SidebarSubItem label={t('profitLoss')} href={route('reports.profit-loss')} active={isActive('reports.profit-loss') || isActive('reports.accounts')} />
                         </SidebarSubGroup>
 
-                        <SidebarSubItem label={t('salesReport')} href={route('reports.sales')} active={isActive('reports.sales')} />
                         <SidebarSubItem label={t('wholesaleReport')} href={route('reports.wholesale')} active={isActive('reports.wholesale')} />
                         <SidebarSubItem label={t('purchaseReport')} href={route('reports.purchase')} active={isActive('reports.purchase')} />
                         <SidebarSubItem label={t('customerOrderReport')} href={route('reports.customer-orders')} active={isActive('reports.customer-orders')} />

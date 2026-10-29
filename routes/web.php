@@ -136,6 +136,9 @@ Route::middleware('auth')->group(function () {
         Route::get('mobile-bank-book', [App\Http\Controllers\Report\ReportController::class, 'mobileBankBookReport'])->name('mobile-bank-book');
         Route::get('profit-loss', [App\Http\Controllers\Report\ReportController::class, 'profitLossReport'])->name('profit-loss');
         Route::get('sales', [App\Http\Controllers\Report\ReportController::class, 'salesReport'])->name('sales');
+        Route::get('customer-ledger', [App\Http\Controllers\Report\ReportController::class, 'customerLedgerReport'])->name('customer-ledger');
+        Route::get('sales-due', [App\Http\Controllers\Report\ReportController::class, 'salesDueReport'])->name('sales-due');
+        Route::get('halkhata', [App\Http\Controllers\Report\ReportController::class, 'halkhataReport'])->name('halkhata');
         Route::get('wholesale', [App\Http\Controllers\Report\ReportController::class, 'wholesaleReport'])->name('wholesale');
         Route::get('purchase', [App\Http\Controllers\Report\ReportController::class, 'purchaseReport'])->name('purchase');
         Route::get('customer-orders', [App\Http\Controllers\Report\ReportController::class, 'customerOrdersReport'])->name('customer-orders');

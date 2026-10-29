@@ -30,8 +30,11 @@ use App\Models\OpeningBalance;
 use App\Models\PurchasePayment;
 use App\Models\SalaryPayment;
 use App\Models\SalePayment;
+use App\Models\SaleReturn;
 use App\Models\SystemSetting;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Inertia\Inertia;
 
 class ReportController extends Controller
@@ -864,7 +867,7 @@ class ReportController extends Controller
     }
 
     /**
-     * 2. Sales Report (Retail)
+     * 2. Sales Report (Retail & All Sales)
      */
     public function salesReport(Request $request)
     {
@@ -872,12 +875,23 @@ class ReportController extends Controller
         $endDate = $request->input('end_date', now()->endOfMonth()->toDateString());
         $branchId = $request->input('branch_id');
         $customerId = $request->input('customer_id');
+        $status = $request->input('status');
+        $saleType = $request->input('sale_type', 'all');
+        $search = $request->input('search');
 
-        $query = Sale::with(['customer', 'branch', 'items.product'])
-            ->where(function ($q) {
+        $query = Sale::with(['customer', 'branch', 'items.product']);
+
+        if ($saleType === 'wholesale') {
+            $query->where('sale_type', 'wholesale');
+        } elseif ($saleType === 'retail') {
+            $query->where(function ($q) {
                 $q->whereNull('sale_type')->orWhere('sale_type', '!=', 'wholesale');
-            })
-            ->whereBetween('sale_date', [$startDate, $endDate]);
+            });
+        }
+
+        if ($startDate && $endDate) {
+            $query->whereBetween('sale_date', [$startDate, $endDate]);
+        }
 
         if ($branchId) {
             $query->where('branch_id', $branchId);
@@ -885,17 +899,30 @@ class ReportController extends Controller
         if ($customerId) {
             $query->where('customer_id', $customerId);
         }
+        if ($status && $status !== 'all') {
+            $query->where('status', $status);
+        }
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('invoice_no', 'like', "%{$search}%")
+                  ->orWhereHas('customer', function ($cq) use ($search) {
+                      $cq->where('name', 'like', "%{$search}%")
+                        ->orWhere('phone', 'like', "%{$search}%");
+                  });
+            });
+        }
 
-        $sales = $query->orderBy('sale_date', 'desc')->get();
-
+        $summaryQuery = clone $query;
         $summary = [
-            'total_sales' => $sales->count(),
-            'total_grand' => $sales->sum('grand_total'),
-            'total_paid' => $sales->sum('paid_amount'),
-            'total_due' => $sales->sum('due_amount'),
-            'total_discount' => $sales->sum('discount'),
-            'total_tax' => $sales->sum('tax'),
+            'total_sales' => $summaryQuery->count(),
+            'total_grand' => (float) $summaryQuery->sum('grand_total'),
+            'total_paid' => (float) $summaryQuery->sum('paid_amount'),
+            'total_due' => (float) $summaryQuery->sum('due_amount'),
+            'total_discount' => (float) $summaryQuery->sum('discount'),
+            'total_tax' => (float) $summaryQuery->sum('tax'),
         ];
+
+        $sales = $query->orderBy('sale_date', 'desc')->orderBy('id', 'desc')->paginate(10)->withQueryString();
 
         $branches = Branch::where('status', 'active')->orderBy('name')->get();
         $customers = Customer::orderBy('name')->get();
@@ -910,6 +937,517 @@ class ReportController extends Controller
                 'end_date' => $endDate,
                 'branch_id' => $branchId,
                 'customer_id' => $customerId,
+                'status' => $status,
+                'sale_type' => $saleType,
+                'search' => $search,
+            ],
+        ]);
+    }
+
+    /**
+     * Customer Ledger (খতিয়ান) Report
+     */
+    public function customerLedgerReport(Request $request)
+    {
+        $customerId = $request->input('customer_id');
+        $startDate = $request->input('start_date', now()->startOfYear()->toDateString());
+        $endDate = $request->input('end_date', now()->toDateString());
+        $branchId = $request->input('branch_id');
+        $search = $request->input('search');
+
+        $branches = Branch::where('status', 'active')->orderBy('name')->get();
+        $allCustomersDropdown = Customer::select('id', 'name', 'phone', 'code')->orderBy('name')->get();
+
+        // 1. Single Customer Detailed Chronological Ledger Mode
+        if ($customerId) {
+            $customer = Customer::with('branch')->findOrFail($customerId);
+
+            // Compute opening balance prior to start_date
+            $baseOpening = (float) ($customer->opening_balance ?? 0);
+
+            $priorSales = (float) Sale::where('customer_id', $customerId)
+                ->where('sale_date', '<', $startDate)
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->sum('grand_total');
+
+            $priorPayments = (float) SalePayment::where('customer_id', $customerId)
+                ->where('payment_date', '<', $startDate)
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->sum('amount');
+
+            $priorReturns = (float) SaleReturn::where('customer_id', $customerId)
+                ->where('return_date', '<', $startDate)
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->sum('total_amount');
+
+            $computedOpeningBalance = $baseOpening + $priorSales - $priorPayments - $priorReturns;
+
+            // Period Sales
+            $sales = Sale::where('customer_id', $customerId)
+                ->whereBetween('sale_date', [$startDate, $endDate])
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->get();
+
+            // Period Payments
+            $payments = SalePayment::where('customer_id', $customerId)
+                ->whereBetween('payment_date', [$startDate, $endDate])
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->get();
+
+            // Period Returns
+            $returns = SaleReturn::where('customer_id', $customerId)
+                ->whereBetween('return_date', [$startDate, $endDate])
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->get();
+
+            $entries = collect();
+
+            foreach ($sales as $s) {
+                $entries->push([
+                    'id' => 'sale_' . $s->id,
+                    'date' => $s->sale_date ? (is_string($s->sale_date) ? $s->sale_date : $s->sale_date->format('Y-m-d')) : '',
+                    'timestamp' => $s->created_at ? $s->created_at->timestamp : 0,
+                    'type' => 'sale',
+                    'type_label' => 'Sales Invoice',
+                    'ref_no' => $s->invoice_no,
+                    'particulars' => 'Invoice Bill #' . $s->invoice_no,
+                    'debit' => (float) $s->grand_total,
+                    'credit' => 0,
+                    'note' => $s->status === 'completed' ? 'Paid: BDT ' . number_format($s->paid_amount, 2) : 'Due: BDT ' . number_format($s->due_amount, 2),
+                ]);
+            }
+
+            foreach ($payments as $p) {
+                $entries->push([
+                    'id' => 'payment_' . $p->id,
+                    'date' => $p->payment_date ? (is_string($p->payment_date) ? $p->payment_date : $p->payment_date->format('Y-m-d')) : '',
+                    'timestamp' => $p->created_at ? $p->created_at->timestamp : 0,
+                    'type' => 'payment',
+                    'type_label' => 'Payment Received',
+                    'ref_no' => $p->payment_no,
+                    'particulars' => 'Due Collection (' . ucfirst(str_replace('_', ' ', $p->payment_method)) . ')',
+                    'debit' => 0,
+                    'credit' => (float) $p->amount,
+                    'note' => $p->notes ?? ($p->reference_no ? 'Ref: ' . $p->reference_no : ''),
+                ]);
+            }
+
+            foreach ($returns as $r) {
+                $entries->push([
+                    'id' => 'return_' . $r->id,
+                    'date' => $r->return_date ? (is_string($r->return_date) ? $r->return_date : $r->return_date->format('Y-m-d')) : '',
+                    'timestamp' => $r->created_at ? $r->created_at->timestamp : 0,
+                    'type' => 'return',
+                    'type_label' => 'Sale Return',
+                    'ref_no' => $r->return_no,
+                    'particulars' => 'Product Return Refund',
+                    'debit' => 0,
+                    'credit' => (float) $r->total_amount,
+                    'note' => $r->reason ?? '',
+                ]);
+            }
+
+            $sorted = $entries->sortBy([
+                ['date', 'asc'],
+                ['timestamp', 'asc'],
+            ])->values();
+
+            $running = $computedOpeningBalance;
+            $ledgerWithBalance = $sorted->map(function ($item) use (&$running) {
+                $running = $running + $item['debit'] - $item['credit'];
+                $item['running_balance'] = $running;
+                return $item;
+            });
+
+            $totalDebit = (float) $sorted->sum('debit');
+            $totalCredit = (float) $sorted->sum('credit');
+
+            $summary = [
+                'opening_balance' => $computedOpeningBalance,
+                'total_debit' => $totalDebit,
+                'total_credit' => $totalCredit,
+                'closing_balance' => $running,
+                'total_transactions' => $sorted->count(),
+            ];
+
+            // Paginate chronological entries
+            $currentPage = LengthAwarePaginator::resolveCurrentPage();
+            $perPage = 10;
+            $currentItems = $ledgerWithBalance->slice(($currentPage - 1) * $perPage, $perPage)->values();
+            $paginatedLedger = new LengthAwarePaginator(
+                $currentItems,
+                $ledgerWithBalance->count(),
+                $perPage,
+                $currentPage,
+                ['path' => LengthAwarePaginator::resolveCurrentPath(), 'query' => $request->query()]
+            );
+
+            return Inertia::render('Reports/CustomerLedger', [
+                'customer' => $customer,
+                'ledgerEntries' => $paginatedLedger,
+                'allEntries' => $ledgerWithBalance,
+                'summary' => $summary,
+                'branches' => $branches,
+                'allCustomersDropdown' => $allCustomersDropdown,
+                'customersList' => null,
+                'filters' => [
+                    'customer_id' => $customerId,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'branch_id' => $branchId,
+                    'search' => $search,
+                ],
+            ]);
+        }
+
+        // 2. Customers Overview Mode (No specific customer selected)
+        $customersQuery = Customer::with('branch');
+        if ($branchId) {
+            $customersQuery->where('branch_id', $branchId);
+        }
+        if ($search) {
+            $customersQuery->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%")
+                  ->orWhere('code', 'like', "%{$search}%")
+                  ->orWhere('address', 'like', "%{$search}%");
+            });
+        }
+
+        $customersList = $customersQuery->orderBy('name')->paginate(10)->withQueryString();
+
+        $customerIds = $customersList->pluck('id');
+        $periodSalesMap = Sale::whereIn('customer_id', $customerIds)
+            ->whereBetween('sale_date', [$startDate, $endDate])
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(grand_total) as total')
+            ->pluck('total', 'customer_id');
+
+        $periodPaymentsMap = SalePayment::whereIn('customer_id', $customerIds)
+            ->whereBetween('payment_date', [$startDate, $endDate])
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(amount) as total')
+            ->pluck('total', 'customer_id');
+
+        $customersList->getCollection()->transform(function ($c) use ($periodSalesMap, $periodPaymentsMap) {
+            $c->period_sales = (float) ($periodSalesMap[$c->id] ?? 0);
+            $c->period_payments = (float) ($periodPaymentsMap[$c->id] ?? 0);
+            return $c;
+        });
+
+        $totalCustomerDue = (float) Customer::when($branchId, fn($q) => $q->where('branch_id', $branchId))->sum('due_balance');
+        $totalCustomersCount = Customer::when($branchId, fn($q) => $q->where('branch_id', $branchId))->count();
+
+        $summary = [
+            'total_customers' => $totalCustomersCount,
+            'total_due_balance' => $totalCustomerDue,
+            'total_invoiced_period' => (float) Sale::whereBetween('sale_date', [$startDate, $endDate])->when($branchId, fn($q) => $q->where('branch_id', $branchId))->sum('grand_total'),
+            'total_collected_period' => (float) SalePayment::whereBetween('payment_date', [$startDate, $endDate])->when($branchId, fn($q) => $q->where('branch_id', $branchId))->sum('amount'),
+        ];
+
+        return Inertia::render('Reports/CustomerLedger', [
+            'customer' => null,
+            'ledgerEntries' => null,
+            'customersList' => $customersList,
+            'summary' => $summary,
+            'branches' => $branches,
+            'allCustomersDropdown' => $allCustomersDropdown,
+            'filters' => [
+                'customer_id' => '',
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'branch_id' => $branchId,
+                'search' => $search,
+            ],
+        ]);
+    }
+
+    /**
+     * Sales Due Report (বিক্রয় বকেয়া রিপোর্ট)
+     */
+    public function salesDueReport(Request $request)
+    {
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        $branchId = $request->input('branch_id');
+        $customerId = $request->input('customer_id');
+        $status = $request->input('status', 'all');
+        $aging = $request->input('aging', 'all');
+        $search = $request->input('search');
+
+        $query = Sale::with(['customer', 'branch'])
+            ->where('due_amount', '>', 0);
+
+        if ($startDate && $endDate) {
+            $query->whereBetween('sale_date', [$startDate, $endDate]);
+        }
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
+        if ($customerId) {
+            $query->where('customer_id', $customerId);
+        }
+        if ($status === 'partial') {
+            $query->where('paid_amount', '>', 0);
+        } elseif ($status === 'unpaid') {
+            $query->where('paid_amount', 0);
+        }
+
+        if ($aging === 'under_30') {
+            $query->where('sale_date', '>=', now()->subDays(30));
+        } elseif ($aging === '30_to_60') {
+            $query->whereBetween('sale_date', [now()->subDays(60), now()->subDays(30)]);
+        } elseif ($aging === 'over_60') {
+            $query->where('sale_date', '<', now()->subDays(60));
+        } elseif ($aging === 'over_90') {
+            $query->where('sale_date', '<', now()->subDays(90));
+        }
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('invoice_no', 'like', "%{$search}%")
+                  ->orWhereHas('customer', function ($cq) use ($search) {
+                      $cq->where('name', 'like', "%{$search}%")
+                        ->orWhere('phone', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        $summaryQuery = clone $query;
+        $allDueSales = $summaryQuery->get();
+        $now = now();
+
+        $summary = [
+            'total_due_amount' => (float) $allDueSales->sum('due_amount'),
+            'total_grand_amount' => (float) $allDueSales->sum('grand_total'),
+            'total_paid_amount' => (float) $allDueSales->sum('paid_amount'),
+            'total_due_invoices' => $allDueSales->count(),
+            'total_due_customers' => $allDueSales->pluck('customer_id')->filter()->unique()->count(),
+            'overdue_30_days' => (float) $allDueSales->filter(function ($s) use ($now) {
+                return $s->sale_date ? $s->sale_date->diffInDays($now) > 30 : false;
+            })->sum('due_amount'),
+        ];
+
+        $sales = $query->orderBy('sale_date', 'desc')->paginate(10)->withQueryString();
+
+        $branches = Branch::where('status', 'active')->orderBy('name')->get();
+        $customers = Customer::orderBy('name')->get();
+
+        return Inertia::render('Reports/SalesDue', [
+            'sales' => $sales,
+            'summary' => $summary,
+            'branches' => $branches,
+            'customers' => $customers,
+            'filters' => [
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'branch_id' => $branchId,
+                'customer_id' => $customerId,
+                'status' => $status,
+                'aging' => $aging,
+                'search' => $search,
+            ],
+        ]);
+    }
+
+    /**
+     * Halkhata (হালখাতা) Report & Invitation Register
+     */
+    public function halkhataReport(Request $request)
+    {
+        $currentYear = (int) date('Y');
+        $year = (int) $request->input('year', $currentYear);
+        $branchId = $request->input('branch_id');
+        $status = $request->input('status', 'all');
+        $search = $request->input('search');
+
+        $startDate = Carbon::createFromDate($year, 1, 1)->startOfDay()->toDateString();
+        $endDate = Carbon::createFromDate($year, 12, 31)->endOfDay()->toDateString();
+
+        $customersQuery = Customer::query()->with('branch');
+
+        if ($branchId) {
+            $customersQuery->where('branch_id', $branchId);
+        }
+
+        if ($search) {
+            $customersQuery->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%")
+                  ->orWhere('code', 'like', "%{$search}%")
+                  ->orWhere('address', 'like', "%{$search}%");
+            });
+        }
+
+        $allCustomers = $customersQuery->get();
+
+        // Pre-aggregate figures for high performance
+        $priorSales = Sale::where('sale_date', '<', $startDate)
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(grand_total) as total')
+            ->pluck('total', 'customer_id');
+
+        $priorPayments = SalePayment::where('payment_date', '<', $startDate)
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(amount) as total')
+            ->pluck('total', 'customer_id');
+
+        $priorReturns = SaleReturn::where('return_date', '<', $startDate)
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(total_amount) as total')
+            ->pluck('total', 'customer_id');
+
+        $periodSales = Sale::whereBetween('sale_date', [$startDate, $endDate])
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(grand_total) as total')
+            ->pluck('total', 'customer_id');
+
+        $periodPayments = SalePayment::whereBetween('payment_date', [$startDate, $endDate])
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(amount) as total')
+            ->pluck('total', 'customer_id');
+
+        $periodReturns = SaleReturn::whereBetween('return_date', [$startDate, $endDate])
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->groupBy('customer_id')
+            ->selectRaw('customer_id, sum(total_amount) as total')
+            ->pluck('total', 'customer_id');
+
+        $halkhataList = $allCustomers->map(function ($c) use (
+            $priorSales, $priorPayments, $priorReturns,
+            $periodSales, $periodPayments, $periodReturns
+        ) {
+            $cid = $c->id;
+            $baseOpening = (float) ($c->opening_balance ?? 0);
+            $pSales = (float) ($priorSales[$cid] ?? 0);
+            $pPayments = (float) ($priorPayments[$cid] ?? 0);
+            $pReturns = (float) ($priorReturns[$cid] ?? 0);
+
+            $openingDue = $baseOpening + $pSales - $pPayments - $pReturns;
+
+            $yrSales = (float) ($periodSales[$cid] ?? 0);
+            $yrPayments = (float) ($periodPayments[$cid] ?? 0);
+            $yrReturns = (float) ($periodReturns[$cid] ?? 0);
+
+            $closingDue = $openingDue + $yrSales - $yrPayments - $yrReturns;
+
+            $bAddress = $c->branch?->address;
+            if (!$bAddress || in_array(strtolower(trim($bAddress)), ['123 main street', 'main street', '123 main st'])) {
+                $bAddress = 'বায়তুল মোকাররম মার্কেট, ঢাকা';
+            }
+            $bPhone = $c->branch?->phone;
+            if (!$bPhone || in_array(trim($bPhone), ['01700000000', '1234567890'])) {
+                $bPhone = '+৮৮০ ১৭০০-০০০০০০';
+            }
+
+            return [
+                'id' => $c->id,
+                'code' => $c->code,
+                'name' => $c->name,
+                'phone' => $c->phone,
+                'address' => $c->address,
+                'branch_name' => $c->branch ? $c->branch->name : 'Main Branch',
+                'branch_phone' => $bPhone,
+                'branch_address' => $bAddress,
+                'opening_due' => $openingDue,
+                'period_sales' => $yrSales,
+                'period_payments' => $yrPayments,
+                'period_returns' => $yrReturns,
+                'closing_due' => $closingDue,
+                'has_due' => $closingDue > 0.01,
+                'invitation_status' => $closingDue > 0.01 ? 'pending_invite' : 'cleared',
+            ];
+        });
+
+        // Apply status filter
+        if ($status === 'with_due') {
+            $halkhataList = $halkhataList->filter(fn($c) => $c['closing_due'] > 0.01);
+        } elseif ($status === 'cleared') {
+            $halkhataList = $halkhataList->filter(fn($c) => $c['closing_due'] <= 0.01);
+        } elseif ($status === 'high_due') {
+            $halkhataList = $halkhataList->filter(fn($c) => $c['closing_due'] >= 10000);
+        }
+
+        // Sort by closing due desc
+        $sorted = $halkhataList->sortByDesc('closing_due')->values();
+
+        $summary = [
+            'total_customers' => $sorted->count(),
+            'total_opening_due' => (float) $sorted->sum('opening_due'),
+            'total_period_sales' => (float) $sorted->sum('period_sales'),
+            'total_period_collections' => (float) $sorted->sum('period_payments'),
+            'total_closing_due' => (float) $sorted->sum('closing_due'),
+            'customers_with_due' => $sorted->filter(fn($c) => $c['closing_due'] > 0.01)->count(),
+            'customers_cleared' => $sorted->filter(fn($c) => $c['closing_due'] <= 0.01)->count(),
+        ];
+
+        // Paginate using LengthAwarePaginator
+        $currentPage = LengthAwarePaginator::resolveCurrentPage();
+        $perPage = 10;
+        $currentItems = $sorted->slice(($currentPage - 1) * $perPage, $perPage)->values();
+        $paginatedCustomers = new LengthAwarePaginator(
+            $currentItems,
+            $sorted->count(),
+            $perPage,
+            $currentPage,
+            ['path' => LengthAwarePaginator::resolveCurrentPath(), 'query' => $request->query()]
+        );
+
+        $branches = Branch::where('status', 'active')->orderBy('name')->get();
+        $availableYears = range($currentYear, $currentYear - 4);
+
+        $shopName = SystemSetting::getByKey('company_name');
+        if (!$shopName || in_array(strtolower(trim($shopName)), ['jewelry erp limited', 'jewelry erp', 'jewelry', 'jewelry erp store'])) {
+            $branch = $request->user()?->branch ?? Branch::where('is_head_office', true)->first();
+            if ($branch && !in_array(strtolower(trim($branch->name)), ['main branch', 'main', 'jewelry erp'])) {
+                $shopName = $branch->name;
+            } else {
+                $appName = config('app.name');
+                if ($appName && !in_array(strtolower(trim($appName)), ['jewelry', 'jewelry erp', 'laravel'])) {
+                    $shopName = $appName;
+                } else {
+                    $shopName = 'স্বর্ণালংকার জুয়েলার্স';
+                }
+            }
+        }
+
+        $cAddress = SystemSetting::getByKey('company_address');
+        if (!$cAddress || in_array(strtolower(trim($cAddress)), ['123 main street', 'main street', '123 main st'])) {
+            $cAddress = 'বায়তুল মোকাররম মার্কেট, ঢাকা';
+        }
+
+        $cPhone = SystemSetting::getByKey('company_phone');
+        if (!$cPhone || in_array(trim($cPhone), ['01700000000', '1234567890'])) {
+            $cPhone = '+৮৮০ ১৭০০-০০০০০০';
+        }
+
+        $company = [
+            'name' => $shopName,
+            'phone' => $cPhone,
+            'email' => SystemSetting::getByKey('company_email', ''),
+            'address' => $cAddress,
+            'tagline' => SystemSetting::getByKey('company_tagline', 'স্বর্ণ, রৌপ্য ও ডায়মন্ড অলংকারের ঐতিহ্যবাহী নির্ভরযোগ্য প্রতিষ্ঠান'),
+            'facebook' => SystemSetting::getByKey('company_facebook', ''),
+            'logo' => SystemSetting::getByKey('invoice_letterhead', null),
+        ];
+
+        return Inertia::render('Reports/Halkhata', [
+            'customers' => $paginatedCustomers,
+            'summary' => $summary,
+            'branches' => $branches,
+            'availableYears' => $availableYears,
+            'currentYear' => $year,
+            'company' => $company,
+            'filters' => [
+                'year' => (string) $year,
+                'branch_id' => $branchId,
+                'status' => $status,
+                'search' => $search,
             ],
         ]);
     }

@@ -71,4 +71,22 @@ class ReportControllerTest extends TestCase
         $response = $this->actingAs($this->user)->get(route('reports.profit-loss'));
         $response->assertStatus(200);
     }
+
+    public function test_customer_ledger_report_page_loads()
+    {
+        $response = $this->actingAs($this->user)->get(route('reports.customer-ledger'));
+        $response->assertStatus(200);
+    }
+
+    public function test_sales_due_report_page_loads()
+    {
+        $response = $this->actingAs($this->user)->get(route('reports.sales-due'));
+        $response->assertStatus(200);
+    }
+
+    public function test_halkhata_report_page_loads()
+    {
+        $response = $this->actingAs($this->user)->get(route('reports.halkhata'));
+        $response->assertStatus(200);
+    }
 }

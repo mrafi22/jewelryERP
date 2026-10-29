@@ -16,12 +16,12 @@ class AccountConfigurationController extends Controller
 
         $config = [
             // Company Information
-            'company_name' => SystemSetting::getByKey('company_name', 'Jewelry ERP Limited'),
-            'company_phone' => SystemSetting::getByKey('company_phone', '+880 1700-000000'),
-            'company_email' => SystemSetting::getByKey('company_email', 'info@jewelryerp.com'),
-            'company_address' => SystemSetting::getByKey('company_address', 'Dhaka, Bangladesh'),
+            'company_name' => SystemSetting::getByKey('company_name', 'স্বর্ণালংকার জুয়েলার্স'),
+            'company_phone' => SystemSetting::getByKey('company_phone', '+৮৮০ ১৭০০-০০০০০০'),
+            'company_email' => SystemSetting::getByKey('company_email', ''),
+            'company_address' => SystemSetting::getByKey('company_address', 'ঢাকা, বাংলাদেশ'),
             'company_trade_license' => SystemSetting::getByKey('company_trade_license', 'TRAD/DNCC/012345/2026'),
-            'company_tagline' => SystemSetting::getByKey('company_tagline', 'Fine Gold & Diamond Craftsman'),
+            'company_tagline' => SystemSetting::getByKey('company_tagline', 'স্বর্ণ, রৌপ্য ও ডায়মন্ড অলংকারের বিশ্বস্ত প্রতিষ্ঠান'),
 
             // Financial & Prefixes
             'financial_year_start' => SystemSetting::getByKey('financial_year_start', '1'), // 1 = January
@@ -32,7 +32,7 @@ class AccountConfigurationController extends Controller
             'purchase_prefix' => SystemSetting::getByKey('purchase_prefix', 'PUR-'),
             'order_prefix' => SystemSetting::getByKey('order_prefix', 'ORD-'),
             'mortgage_prefix' => SystemSetting::getByKey('mortgage_prefix', 'MORT-'),
-            'receipt_footer_text' => SystemSetting::getByKey('receipt_footer_text', 'Thank you for buying from Jewelry ERP. All gold products are certified.'),
+            'receipt_footer_text' => SystemSetting::getByKey('receipt_footer_text', 'আমাদের প্রতিষ্ঠানে কেনাকাটার জন্য ধন্যবাদ। সকল স্বর্ণের মান নিশ্চিতকৃত।'),
         ];
 
         return Inertia::render('Settings/AccountConfig/Index', [

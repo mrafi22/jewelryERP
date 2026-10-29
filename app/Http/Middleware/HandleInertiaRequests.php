@@ -52,8 +52,25 @@ class HandleInertiaRequests extends Middleware
             })
             ->values();
 
+        $softwareName = \App\Models\SystemSetting::getByKey('company_name');
+        if (!$softwareName || in_array(strtolower(trim($softwareName)), ['jewelry erp limited', 'jewelry erp', 'jewelry', 'jewelry erp store'])) {
+            $branch = $activeBranch ?? \App\Models\Branch::where('is_head_office', true)->first();
+            if ($branch && !in_array(strtolower(trim($branch->name)), ['main branch', 'main', 'jewelry erp'])) {
+                $softwareName = $branch->name;
+            } else {
+                $appName = config('app.name');
+                if ($appName && !in_array(strtolower(trim($appName)), ['jewelry', 'jewelry erp', 'laravel'])) {
+                    $softwareName = $appName;
+                } else {
+                    $softwareName = 'স্বর্ণালংকার জুয়েলার্স';
+                }
+            }
+        }
+
         return [
             ...parent::share($request),
+            'software_name' => $softwareName,
+            'company_name' => $softwareName,
             'auth' => [
                 'user' => $user,
                 'active_branch' => $activeBranch,

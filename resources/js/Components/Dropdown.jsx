@@ -14,7 +14,7 @@ const Dropdown = ({ children }) => {
 
     return (
         <DropDownContext.Provider value={{ open, setOpen, toggleOpen }}>
-            <div className="relative inline-block text-left">{children}</div>
+            <div className={`relative inline-block text-left ${open ? 'z-50' : ''}`}>{children}</div>
         </DropDownContext.Provider>
     );
 };
@@ -48,6 +48,7 @@ const Content = ({
     const { open, setOpen } = useContext(DropDownContext);
 
     let alignmentClasses = 'origin-top';
+    const isTop = align === 'top-right' || align === 'up' || align === 'top-left';
 
     if (align === 'left') {
         alignmentClasses = 'left-0 origin-top-left';
@@ -55,6 +56,8 @@ const Content = ({
         alignmentClasses = 'right-0 origin-top-right';
     } else if (align === 'top-right' || align === 'up') {
         alignmentClasses = 'right-0 bottom-full mb-2 origin-bottom-right';
+    } else if (align === 'top-left') {
+        alignmentClasses = 'left-0 bottom-full mb-2 origin-bottom-left';
     }
 
     let widthClasses = 'w-48';
@@ -76,7 +79,10 @@ const Content = ({
                 leaveTo="opacity-0 scale-95"
             >
                 <div
-                    className={`absolute z-50 mt-2 rounded-xl shadow-2xl border border-gray-100 bg-white ${alignmentClasses} ${widthClasses}`}
+                    className={`absolute z-50 ${isTop ? '' : 'mt-2'} rounded-xl shadow-2xl border border-gray-100 bg-white ${alignmentClasses} ${widthClasses}`}
+                    onClickCapture={() => {
+                        setOpen(false);
+                    }}
                     onClick={() => {
                         setOpen(false);
                     }}
@@ -91,9 +97,14 @@ const Content = ({
 };
 
 const DropdownLink = ({ className = '', children, ...props }) => {
+    const { setOpen } = useContext(DropDownContext);
     return (
         <Link
             {...props}
+            onClick={(e) => {
+                setOpen(false);
+                if (props.onClick) props.onClick(e);
+            }}
             className={
                 'block w-full px-4 py-2 text-start text-sm leading-5 text-gray-700 transition duration-150 ease-in-out hover:bg-gray-100 focus:bg-gray-100 focus:outline-none ' +
                 className
